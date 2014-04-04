@@ -617,11 +617,10 @@ def _do_subject_segment(subject_data, normalize=False, caching=True,
     return subject_data.sanitize()
 
 
-def _do_subject_normalize(subject_data, fwhm=0., caching=True,
+def _do_subject_normalize(subject_data, fwhm=0., anat_fwhm=0., caching=True,
                           func_write_voxel_sizes=[3, 3, 3],
                           anat_write_voxel_sizes=[1, 1, 1],
-                          report=True, software="spm",
-                          hardlink_output=True
+                          report=True, software="spm", hardlink_output=True
                           ):
     """
     Wrapper for running spm.Segment with optional reporting.
@@ -632,7 +631,7 @@ def _do_subject_normalize(subject_data, fwhm=0., caching=True,
     Parameters
     -----------
     subject_data: `SubjectData` object
-        subject data whose functiona and anatomical images (subject_data.func
+        subject data whose functional and anatomical images (subject_data.func
         and subject_data.anat) are to be normalized (warped into standard
         spac)
 
@@ -704,9 +703,13 @@ def _do_subject_normalize(subject_data, fwhm=0., caching=True,
     subject_data.parameter_file = parameter_file
 
     # do normalization proper
+    stuff = zip(['anat', 'func'], [subject_data.anat,
+                                   subject_data.func],
+                [cm.gray, cm.spectral])
     for brain_name, brain, cmap in zip(
         ['anat', 'func'], [subject_data.anat, subject_data.func],
         [cm.gray, cm.spectral]):
+        if not brain: continue
         if segmented:
             if brain_name == 'func':
                 apply_to_files, file_types = ravel_filenames(subject_data.func)
@@ -801,10 +804,10 @@ def _do_subject_normalize(subject_data, fwhm=0., caching=True,
         subject_data.generate_normalization_thumbnails()
 
     # explicit smoothing
-    if np.sum(fwhm) > 0:
+    if np.sum(fwhm) + np.sum(anat_fwhm) > 0:
         subject_data = _do_subject_smooth(
-            subject_data, fwhm, caching=caching,
-            report=report
+            subject_data, fwhm, anat_fwhm=anat_fwhm,
+            caching=caching, report=report
             )
 
     # commit output files
@@ -814,8 +817,8 @@ def _do_subject_normalize(subject_data, fwhm=0., caching=True,
     return subject_data.sanitize()
 
 
-def _do_subject_smooth(subject_data, fwhm, caching=True, report=True,
-                       hardlink_output=True, software="spm"):
+def _do_subject_smooth(subject_data, fwhm, anat_fwhm=0., caching=True,
+                       report=True, hardlink_output=True, software="spm"):
     """
     Wrapper for running spm.Smooth with optional reporting.
 
@@ -848,6 +851,9 @@ def _do_subject_smooth(subject_data, fwhm, caching=True, report=True,
 
     """
 
+    if not subject_data.func:
+        return subject_data
+
     # sanitize software choice
     software = software.lower()
     if software != "spm":
@@ -866,22 +872,34 @@ def _do_subject_smooth(subject_data, fwhm, caching=True, report=True,
         smooth = spm.Smooth().run
 
     # configure node
-    in_files, file_types = ravel_filenames(subject_data.func)
+    # in_files, file_types = ravel_filenames(subject_data.func)
 
     # run node
-    smooth_result = smooth(in_files=in_files,
-                           fwhm=fwhm,
-                           ignore_exception=False
-                           )
-    # failed node ?
-    subject_data.nipype_results['smooth'] = smooth_result
-    if smooth_result.outputs is None:
-        subject_data.failed = True
-        return subject_data
+    subject_data.nipype_results['smooth'] = {}
+    for brain_name, brain, _fwhm in zip(["anat", "func"], [subject_data.anat,
+                                                           subject_data.func],
+                                        [anat_fwhm, fwhm]):
+        if not brain: continue
+        if np.sum(_fwhm) == 0: continue
+        file_types = None
+        if brain_name == "func":
+            brain, file_types = ravel_filenames(brain)
+        smooth_result = smooth(in_files=brain,
+                               fwhm=_fwhm,
+                               ignore_exception=False
+                               )
+        # failed node ?
+        subject_data.nipype_results['smooth'][brain_name] = smooth_result
+        if smooth_result.outputs is None:
+            subject_data.failed = True
+            return subject_data
 
-    # collect results
-    subject_data.func = unravel_filenames(
-        smooth_result.outputs.smoothed_files, file_types)
+        if not file_types:
+            setattr(subject_data, brain_name, unravel_filenames(
+                    smooth_result.outputs.smoothed_files, file_types))
+        else:
+            setattr(subject_data, brain_name,
+                    smooth_result.outputs.smoothed_files)
 
     # commit output files
     if hardlink_output:
@@ -1048,6 +1066,7 @@ def do_subject_preproc(
     normalize=True,
     dartel=False,
     fwhm=0.,
+    anat_fwhm=0.,
     func_write_voxel_sizes=None,
     anat_write_voxel_sizes=None,
 
@@ -1281,6 +1300,7 @@ def do_subject_preproc(
         subject_data = _do_subject_normalize(
             subject_data,
             fwhm,  # smooth func after normalization
+            anat_fwhm=anat_fwhm,
             func_write_voxel_sizes=func_write_voxel_sizes,
             anat_write_voxel_sizes=anat_write_voxel_sizes,
             caching=caching,
@@ -1296,8 +1316,9 @@ def do_subject_preproc(
     #########################################
     # Smooth without Spatial Normalization
     #########################################
-    if not normalize and np.sum(fwhm) > 0:
+    if not normalize and np.sum(fwhm) + np.sum(anat_fwhm) > 0:
         subject_data = _do_subject_smooth(subject_data, fwhm,
+                                          anat_fwhm=anat_fwhm,
                                           caching=caching,
                                           report=report,
                                           hardlink_output=hardlink_output
@@ -1548,7 +1569,7 @@ def do_subjects_preproc(subject_factory,
     preproc_params["caching"] = caching
 
     # configure number of jobs
-    n_jobs = int(os.environ['N_JOBS']) if 'N_JOBS' in os.environ else (
+    n_jobs = int(os.environ['N_JOBS']) if "N_JOBS" in os.environ else (
         -1 if n_jobs is None else n_jobs)
 
     _n_jobs = None

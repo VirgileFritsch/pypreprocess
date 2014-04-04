@@ -208,6 +208,8 @@ class SubjectData(object):
 
         """
 
+        if not self.func: return
+
         self.isdicom = False
         if not isinstance(self.func[0], basestring):
             if not is_niimg(self.func[0]):
@@ -461,7 +463,7 @@ class SubjectData(object):
         self.report = True
         self.results_gallery = None
         self.parent_results_gallery = parent_results_gallery
-        self.cv_tc = cv_tc
+        self.cv_tc = cv_tc and self.func
 
         # report filenames
         self.report_log_filename = os.path.join(
@@ -697,6 +699,7 @@ class SubjectData(object):
         for brain_name, brain, cmap in zip(
             ['anat', 'func'], [self.anat, self.func],
             [cm.gray, cm.spectral]):
+            if not brain: continue
             thumbs = generate_segmentation_thumbnails(
                 brain,
                 self.reports_output_dir,
@@ -735,7 +738,7 @@ class SubjectData(object):
             ['anat', 'func'], [self.anat, self.func],
             [cm.gray, cm.spectral]):
 
-            if not hasattr(self, brain_name):
+            if not hasattr(self, brain_name) or not brain:
                 continue
 
             # generate segmentation thumbs

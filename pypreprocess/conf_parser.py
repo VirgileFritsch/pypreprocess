@@ -47,7 +47,7 @@ def _parse_job(jobfile, **replacements):
             if not val is None:
                 val = eval(val)
 
-        if key in ["fwhm", "anat_voxel_sizes", "func_voxel_sizes",
+        if key in ["fwhm", "anat_fwhm", "anat_voxel_sizes", "func_voxel_sizes",
                    "slice_order"]:
             dtype = np.int if key == "slice_order" else np.float
             val = ",".join(val).replace("[", "")
@@ -155,10 +155,11 @@ def _generate_preproc_pipeline(jobfile, dataset_dir=None,
     subject_dir_wildcard = os.path.join(dataset_dir,
                                         options.get("subject_dirs",
                                                     "*"))
+
     sessions = [k for k in options.keys() if re.match("session_.+_func", k)]
     session_ids = [re.match("session_(.+)_func", session).group(1)
                    for session in sessions]
-    assert len(sessions) > 0
+
     subject_data_dirs = sorted(glob.glob(subject_dir_wildcard))
     assert subject_data_dirs, (
         "No subject directories found for wildcard: %s" % (
@@ -229,9 +230,12 @@ def _generate_preproc_pipeline(jobfile, dataset_dir=None,
         # anat output dir
         anat_output_dir = None
         if anat_dir:
-            anat_output_dir = os.path.join(subject_output_dir,
-                                           get_relative_path(subject_data_dir,
-                                                             anat_dir))
+            anat_output_dir_bn = get_relative_path(subject_data_dir,
+                                                   anat_dir)
+            anat_output_dir = os.path.join(
+                subject_output_dir,
+                anat_output_dir_bn if anat_output_dir_bn else ""
+                )
 
             if not os.path.exists(anat_output_dir):
                 os.makedirs(anat_output_dir)
@@ -312,6 +316,7 @@ def _generate_preproc_pipeline(jobfile, dataset_dir=None,
 
     # configure smoothing node
     preproc_params["fwhm"] = options.get("fwhm", 0.)
+    preproc_params["anat_fwhm"] = options.get("anat_fwhm", 0.)
 
     return subjects, preproc_params
 
