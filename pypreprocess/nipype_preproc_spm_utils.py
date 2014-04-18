@@ -511,8 +511,9 @@ def _do_subject_coregister(subject_data, reslice=False,
     return subject_data.sanitize()
 
 
-def _do_subject_segment(subject_data, normalize=False, caching=True,
-                        report=True, software="spm", hardlink_output=True):
+def _do_subject_segment(subject_data, output_modulated_tpms=True,
+                        normalize=False, caching=True, report=True,
+                        software="spm", hardlink_output=True):
     """
     Wrapper for running spm.Segment with optional reporting.
 
@@ -524,6 +525,10 @@ def _do_subject_segment(subject_data, normalize=False, caching=True,
     subject_data: `SubjectData` object
         subject data whose anatomical image (subject_data.anat) is to be
         segmented
+
+    output_modulated_tpms: bool, optional (default False)
+        if set, then modulated TPMS will be produced (alongside unmodulated
+        TPMs); this can be useful for VBM
 
     caching: bool, optional (default True)
         if true, then caching will be enabled
@@ -595,9 +600,9 @@ def _do_subject_segment(subject_data, normalize=False, caching=True,
         wm_output_type = [False, False, True]
         csf_output_type = [False, False, True]
     else:
-        gm_output_type = [True, False, True]
-        wm_output_type = [True, False, True]
-        csf_output_type = [True, False, True]
+        gm_output_type = [output_modulated_tpms, True, True]
+        wm_output_type = [output_modulated_tpms, True, True]
+        csf_output_type = [output_modulated_tpms, True, True]
 
     # run node
     segment_result = segment(
@@ -746,7 +751,7 @@ def _do_subject_normalize(subject_data, fwhm=0., anat_fwhm=0., caching=True,
             normalize_result = normalize(
                 parameter_file=parameter_file,
                 apply_to_files=apply_to_files,
-                write_voxel_sizes=write_voxel_sizes,
+                write_voxel_sizes=tuple(write_voxel_sizes),
                 # write_bounding_box=[[-78, -112, -50], [78, 76, 85]],
                 write_interp=1,
                 jobtype='write',
@@ -779,7 +784,7 @@ def _do_subject_normalize(subject_data, fwhm=0., anat_fwhm=0., caching=True,
                 parameter_file=parameter_file,
                 apply_to_files=apply_to_files,
                 write_bounding_box=[[-78, -112, -50], [78, 76, 85]],
-                write_voxel_sizes=write_voxel_sizes,
+                write_voxel_sizes=tuple(write_voxel_sizes),
                 write_wrap=[0, 0, 0],
                 write_interp=1,
                 jobtype='write',
@@ -937,6 +942,7 @@ def _do_subject_dartelnorm2mni(subject_data,
                                template_file,
                                fwhm=0,
                                anat_fwhm=0.,
+                               output_modulated_tpms=False,
                                caching=True,
                                report=True,
                                parent_results_gallery=None,
@@ -953,6 +959,10 @@ def _do_subject_dartelnorm2mni(subject_data,
     ----------
     output_dir: string
         existing directory; results will be cache here
+
+    output_modulated_tpms: bool, optional (default False)
+        if set, then modulated TPMS will be produced (alongside unmodulated
+        TPMs); this can be useful for VBM
 
     caching: bool, optional (default True)
         if true, then caching will be enabled
@@ -991,7 +1001,7 @@ def _do_subject_dartelnorm2mni(subject_data,
                 apply_to_files=getattr(subject_data, tissue),
                 flowfield_files=subject_data.dartel_flow_fields,
                 template_file=template_file,
-                modulate=False,  # don't modulate
+                modulate=output_modulated_tpms,  # don't modulate
                 fwhm=anat_fwhm,
                 **tricky_kwargs
                 )
@@ -1004,7 +1014,7 @@ def _do_subject_dartelnorm2mni(subject_data,
         flowfield_files=subject_data.dartel_flow_fields,
         template_file=template_file,
         ignore_exception=False,
-        modulate=False,  # don't modulate
+        modulate=output_modulated_tpms,
         fwhm=anat_fwhm,
         **tricky_kwargs
         )
@@ -1368,10 +1378,12 @@ def _do_subjects_dartel(subjects,
                         anat_fwhm=0.,
                         func_write_voxel_sizes=None,
                         anat_write_voxel_sizes=None,
+                        output_modulated_tpms=False,
                         n_jobs=-1,
                         report=True,
                         cv_tc=True,
-                        parent_results_gallery=None
+                        parent_results_gallery=None,
+                        **kwargs
                         ):
     """
     Runs NewSegment + DARTEL on given subjects.
@@ -1435,6 +1447,7 @@ def _do_subjects_dartel(subjects,
                 fwhm=fwhm, anat_fwhm=anat_fwhm,
                 func_write_voxel_sizes=func_write_voxel_sizes,
                 anat_write_voxel_sizes=anat_write_voxel_sizes,
+                output_modulated_tpms=output_modulated_tpms,
                 template_file=dartel_result.outputs.final_template_file,
                 )
           for subject_data in subjects)
@@ -1443,21 +1456,6 @@ def _do_subjects_dartel(subjects,
 
 
 def do_subjects_preproc(subject_factory,
-                        output_dir=None,
-                        hardlink_output=True,
-                        n_jobs=None,
-                        caching=True,
-                        dartel=False,
-                        func_write_voxel_sizes=None,
-                        anat_write_voxel_sizes=None,
-                        report=True,
-                        dataset_id=None,
-                        dataset_description="",
-                        prepreproc_undergone="",
-                        shutdown_reloaders=True,
-                        dataset_dir=None,
-                        spm_dir=None,
-                        matlab_exec=None,
                         **preproc_params
                         ):
     """
@@ -1527,73 +1525,50 @@ def do_subjects_preproc(subject_factory,
 
     """
 
+    # load .ini ?
     preproc_details = None
     if isinstance(subject_factory, basestring):
-        preproc_details = open(subject_factory, "r").read()
-        subject_factory, preproc_params = _generate_preproc_pipeline(
-            subject_factory, dataset_dir=dataset_dir)
-        report = preproc_params["report"]
+        with open(subject_factory, "r") as fd:
+            preproc_details = fd.read()
+            fd.close()
+        subject_factory, _preproc_params = _generate_preproc_pipeline(
+            subject_factory, dataset_dir=preproc_params.get(
+                "dataset_dir", None))
+        _preproc_params.update(preproc_params)
+        preproc_params = _preproc_params
 
-        if "matlab_exec" in preproc_params:
-            matlab_exec = preproc_params["matlab_exec"]
-            del preproc_params["matlab_exec"]
+    # collect some params for local usage
+    dartel = preproc_params.get('dartel', False)
+    output_dir = preproc_params.get('output_dir', "pypreprocess_output")
+    if "output_dir" in preproc_params: del preproc_params["output_dir"]
+    report = preproc_params.get("report", True)
+    spm_dir = preproc_params.get("spm_dir", None)
+    matlab_exec = preproc_params.get("matlab_exec", None)
+    dataset_id = preproc_params.get('dataset_id', None)
+    dataset_description = preproc_params.get('dataset_description', None)
+    shutdown_reloaders = preproc_params.get('shutdown_reloaders', True)
+    n_jobs = preproc_params.get('n_jobs', None)
+    if "n_jobs" in preproc_params: del preproc_params["n_jobs"]
 
-        if "spm_dir" in preproc_params:
-            spm_dir = preproc_params["spm_dir"]
-            del preproc_params["spm_dir"]
-
-        if "dataset_id" in preproc_params:
-            dataset_id = preproc_params["dataset_id"]
-            del preproc_params["dataset_id"]
-
-        if "dartel" in preproc_params: dartel = preproc_params["dartel"]
-
-        if "caching" in preproc_params: caching = preproc_params["caching"]
-
-        if "report" in preproc_params: report = preproc_params["report"]
-
-        if not preproc_params.get("dataset_description", None) is None:
-            dataset_description = preproc_params["dataset_description"]
-            del preproc_params["dataset_description"]
-
-        if "spm_dir" in preproc_params:
-            if preproc_params["spm_dir"]:
-                spm_dir = preproc_params["spm_dir"]
-            del preproc_params["spm_dir"]
-
-        if "matlab_exec" in preproc_params:
-            if preproc_params["matlab_exec"]:
-                matlab_exec = preproc_params["matlab_exec"]
-            del preproc_params["matlab_exec"]
+    print "Using the following parameters for preprocessing:"
+    for k, v in preproc_params.iteritems(): print "\t%s=%s" % (k, v)
 
     # generate subjects (if generator)
-    subject_factory = [subject_data
-                       for subject_data in subject_factory]
+    subject_factory = [subject_data for subject_data in subject_factory]
 
     # DARTEL on 1 subject is senseless
     dartel = dartel and (len(subject_factory) > 1)
 
-    # configure SPM back-end    
+    # configure SPM back-end
+    # XXX what about precompiled SPM; the following check would be too harsh in
+    # XXX this case
     _configure_backends(spm_dir=spm_dir, matlab_exec=matlab_exec)
     assert not SPM_DIR is None and os.path.isdir(SPM_DIR), (
         "SPM_DIR '%s' doesn't exist; you need to export it!" % SPM_DIR)
 
-    preproc_params['report'] = report
-    preproc_params["dartel"] = dartel
-    preproc_params[
-        'prepreproc_undergone'] = prepreproc_undergone
-    preproc_params['hardlink_output'] = hardlink_output
-    preproc_params["caching"] = caching
-
     # configure number of jobs
-    n_jobs = int(os.environ['N_JOBS']) if "N_JOBS" in os.environ else (
-        -1 if n_jobs is None else n_jobs)
-
-    _n_jobs = None
-    if "n_jobs" in preproc_params:
-        _n_jobs = preproc_params["n_jobs"]
-        del preproc_params["n_jobs"]
-    n_jobs = _n_jobs if not _n_jobs is None else n_jobs
+    if n_jobs is None: n_jobs = 1
+    n_jobs = int(os.environ.get('N_JOBS', n_jobs))
 
     # sanitize output_dir
     if output_dir is None:
@@ -1644,9 +1619,9 @@ def do_subjects_preproc(subject_factory,
             args, _, _, values = inspect.getargvalues(frame)
             preproc_func_name = inspect.getframeinfo(frame)[2]
             preproc_details += ("Function <i>%s(...)</i> was invoked by "
-                                    "the script"
-                                    " <i>%s</i> with the following arguments:"
-                                    ) % (preproc_func_name, user_script_name)
+                                "the script"
+                                " <i>%s</i> with the following arguments:"
+                                ) % (preproc_func_name, user_script_name)
             args_dict = dict((arg, values[arg]) for arg in args if not arg in [
                     "dataset_description",
                     "report_filename",
@@ -1726,37 +1701,22 @@ def do_subjects_preproc(subject_factory,
 
         print "\r\n\tHTML report written to %s" % report_preproc_filename
 
+    # don't yet segment nor normalize if dartel enabled
     if dartel:
-        fwhm = preproc_params.get("fwhm", 0.)
-        anat_fwhm = preproc_params.get("anat_fwhm", 0.)
-        func_write_voxel_sizes = preproc_params.get(
-            "func_write_voxel_sizes", None)
-        func_write_voxel_sizes = preproc_params.get(
-            "func_write_voxel_sizes", None)
-        preproc_params["fwhm"] = 0.
-        cv_tc = preproc_params.get("cv_tc", True)
-        for item in ["segment", "normalize", "cv_tc",
-                     "last_stage"]:
+        for item in ["segment", "normalize", "cv_tc", "last_stage"]:
             preproc_params[item] = False
 
-    preproc_subject_data = Parallel(n_jobs=n_jobs)(
-        delayed(do_subject_preproc)(
-            subject_data,
-            **preproc_params)
-        for subject_data in subjects)
+    # run classic preproc
+    preproc_subject_data = Parallel(n_jobs=n_jobs)(delayed(do_subject_preproc)(
+            subject_data, **preproc_params) for subject_data in subjects)
 
-    # DARTEL
+    # run DARTEL
     if dartel:
         preproc_subject_data = _do_subjects_dartel(
             preproc_subject_data, output_dir,
             n_jobs=n_jobs,
-            fwhm=fwhm, anat_fwhm=anat_fwhm,
-            func_write_voxel_sizes=func_write_voxel_sizes,
-            anat_write_voxel_sizes=anat_write_voxel_sizes,
-            report=preproc_params.get("report", True),
-            cv_tc=cv_tc,
-            parent_results_gallery=parent_results_gallery
-            )
+            parent_results_gallery=parent_results_gallery,
+            **preproc_params)
 
     finalize_report()
 
