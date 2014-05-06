@@ -107,6 +107,7 @@ class SubjectData(object):
         self.warpable = warpable
         self.failed = False
         self.warpable = warpable
+        self.isdicom = False
 
         # nipype outputs
         self.nipype_results = {}
@@ -210,7 +211,6 @@ class SubjectData(object):
 
         if not self.func: return
 
-        self.isdicom = False
         if self.func:
             if not isinstance(self.func[0], basestring):
                 if not is_niimg(self.func[0]):
